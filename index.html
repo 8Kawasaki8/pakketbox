@@ -151,7 +151,7 @@
     <h2>Verbinding</h2>
     <div class="conn-row">
       <span id="bleState" class="pill" data-state="idle"><span class="dot"></span><span id="bleStateText">Niet verbonden</span></span>
-      <button id="connectBleButton" class="btn-primary">Verbinden</button>
+      <button id="connectBleButton" class="btn-primary">Verbinden</button><button id="showAllButton" style="font-size:0.8rem;padding:8px 10px" title="Toont alle Bluetooth-apparaten in de buurt">Alle apparaten</button>
       <button id="disconnectBleButton" hidden>Verbreken</button>
     </div>
   </section>
@@ -273,7 +273,7 @@
   // ==========================================================================
   // Event listeners: knoppen koppelen aan functies
   // ==========================================================================
-  connectButton.addEventListener('click', connectToDevice);
+  connectButton.addEventListener('click', () => connectToDevice(false)); document.getElementById('showAllButton').addEventListener('click', () => connectToDevice(true));
   disconnectButton.addEventListener('click', disconnectDevice);
   openButton.addEventListener('click', () => writeOnCharacteristic(CMD_OPEN));
   closeButton.addEventListener('click', () => writeOnCharacteristic(CMD_CLOSE));
@@ -283,16 +283,16 @@
   // ==========================================================================
   // 1. Verbinding leggen + services/karakteristieken ophalen + notificaties
   // ==========================================================================
-  async function connectToDevice() {
+  async function connectToDevice(showAll = false) {
     try {
       setConnectionState('Zoeken...', 'busy');
 
       // 1a) Koppelvenster van de browser: toont enkel apparaten met onze naam.
       //     optionalServices: anders mag de pagina onze service niet gebruiken.
-      bleDevice = await navigator.bluetooth.requestDevice({
-        filters: [{ name: DEVICE_NAME }],
-        optionalServices: [SERVICE_UUID]
-      });
+      bleDevice = await navigator.bluetooth.requestDevice(showAll
+        ? { acceptAllDevices: true, optionalServices: [SERVICE_UUID] }
+        : { filters: [{ services: [SERVICE_UUID] }, { name: DEVICE_NAME }], optionalServices: [SERVICE_UUID] });
+      // Filter: service-UUID OF naam. De UUID zit in het eerste advertentiepakket (betrouwbaarder op iPhone).
       bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
 
       // 1b) Verbinding maken met de GATT-server op de ESP32.
@@ -323,7 +323,7 @@
       setConnectionState(`Verbonden met ${bleDevice.name}`, 'connected');
       detailDevice.textContent = bleDevice.name;
       detailService.textContent = SERVICE_UUID;
-      connectButton.hidden = true;
+      connectButton.hidden = true; document.getElementById('showAllButton').hidden = true;
       disconnectButton.hidden = false;
       setControlsEnabled(true);
       addLog('system', 'Verbonden, notificaties actief');
@@ -356,7 +356,7 @@
 
     // HIER WORDT HET SCHERM (UI) BIJGEWERKT: terug naar niet-verbonden.
     setConnectionState('Niet verbonden', 'idle');
-    connectButton.hidden = false;
+    connectButton.hidden = false; document.getElementById('showAllButton').hidden = false;
     disconnectButton.hidden = true;
     setControlsEnabled(false);
     statusBox.dataset.state = 'unknown';
