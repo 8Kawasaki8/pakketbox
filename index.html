@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<!--
+  Slimme pakketbox - BLE-bediening voor de gsm (Web Bluetooth API).
+
+  Werkt in Chrome/Edge op Android, Windows en macOS. Op een iPhone: gebruik de
+  gratis app "Bluefy" (Safari ondersteunt Web Bluetooth niet).
+  De pagina moet via https (bv. GitHub Pages) of localhost geopend worden.
+
+  Docs Web Bluetooth: https://developer.mozilla.org/en-US/docs/Web/API/Web_Bluetooth_API
+-->
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0f172a">
+  <title>Slimme Pakketbox</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --card-2: #273449;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --line: #334155;
+      --open: #22c55e;
+      --open-soft: rgba(34, 197, 94, 0.15);
+      --closed: #60a5fa;
+      --closed-soft: rgba(96, 165, 250, 0.15);
+      --warn: #f59e0b;
+      --error: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.4;
+    }
+    main { max-width: 480px; margin: 0 auto; padding: 16px; }
+    header { display: flex; align-items: center; gap: 12px; margin: 4px 0 16px; }
+    header svg { flex: none; }
+    h1 { font-size: 1.35rem; margin: 0; }
+    .subtitle { color: var(--muted); font-size: 0.85rem; margin: 0; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card h2 {
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--muted); margin: 0 0 10px;
+    }
+
+    .warning {
+      background: rgba(245, 158, 11, 0.12); border: 1px solid var(--warn);
+      color: #fde68a; border-radius: 12px; padding: 12px; margin-bottom: 12px;
+      font-size: 0.9rem;
+    }
+
+    /* Verbinding */
+    .conn-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px; font-size: 0.9rem;
+      padding: 6px 12px; border-radius: 999px; background: var(--card-2);
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+    .pill[data-state="connected"] .dot { background: var(--open); box-shadow: 0 0 8px var(--open); }
+    .pill[data-state="busy"] .dot { background: var(--warn); animation: pulse 1s infinite; }
+    .pill[data-state="error"] .dot { background: var(--error); }
+    @keyframes pulse { 50% { opacity: 0.3; } }
+
+    button {
+      font: inherit; font-weight: 600; border: 0; border-radius: 12px;
+      padding: 12px 16px; cursor: pointer; color: var(--text); background: var(--card-2);
+      transition: transform 0.08s, opacity 0.2s;
+    }
+    button:active:not(:disabled) { transform: scale(0.97); }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-primary { background: #2563eb; }
+
+    /* Status */
+    .status {
+      display: flex; align-items: center; gap: 16px; padding: 18px;
+      border-radius: 14px; background: var(--card-2); transition: background 0.3s;
+    }
+    .status[data-state="open"] { background: var(--open-soft); }
+    .status[data-state="closed"] { background: var(--closed-soft); }
+    .status svg { flex: none; }
+    .status[data-state="open"] .lock { color: var(--open); }
+    .status[data-state="closed"] .lock { color: var(--closed); }
+    .lock { color: var(--muted); }
+    .lock .shackle { transition: transform 0.3s; transform-origin: 34px 26px; }
+    .status[data-state="open"] .shackle { transform: translateY(-7px) rotate(-25deg); }
+    .status-text { font-size: 1.45rem; font-weight: 700; margin: 0; }
+    .status-time { color: var(--muted); font-size: 0.85rem; margin: 2px 0 0; }
+    .pending { color: var(--warn); font-size: 0.85rem; margin: 10px 0 0; }
+    .pending:empty { display: none; }
+
+    /* Bediening */
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .controls button { padding: 18px 10px; font-size: 1.05rem; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+    #openButton { background: #15803d; }
+    #closeButton { background: #1d4ed8; }
+    .controls button.active { outline: 3px solid var(--text); outline-offset: 2px; }
+    .sent { color: var(--muted); font-size: 0.85rem; margin: 12px 0 0; }
+    .sent strong { color: var(--text); }
+
+    /* Planning */
+    .info { display: flex; align-items: center; gap: 10px; font-size: 1rem; }
+
+    /* Log */
+    #logList { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; max-height: 260px; overflow-y: auto; }
+    #logList li { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+    #logList li:last-child { border-bottom: 0; }
+    .log-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .badge { font-size: 0.7rem; font-weight: 700; padding: 2px 6px; border-radius: 6px; white-space: nowrap; }
+    .badge.out { background: rgba(37, 99, 235, 0.3); color: #bfdbfe; }
+    .badge.in { background: rgba(34, 197, 94, 0.25); color: #bbf7d0; }
+    .badge.system { background: var(--card-2); color: var(--muted); }
+    .badge.error { background: rgba(248, 113, 113, 0.25); color: #fecaca; }
+
+    details { font-size: 0.85rem; color: var(--muted); }
+    details summary { cursor: pointer; }
+    details dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 10px 0 0; }
+    details dt { color: var(--muted); }
+    details dd { margin: 0; color: var(--text); font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="6" y="14" width="36" height="28" rx="4" fill="#b45309"/>
+      <path d="M6 18 L24 8 L42 18" fill="#d97706"/>
+      <rect x="21" y="14" width="6" height="28" fill="#fbbf24"/>
+    </svg>
+    <div>
+      <h1>Slimme Pakketbox</h1>
+      <p class="subtitle">Bediening via Bluetooth Low Energy</p>
+    </div>
+  </header>
+
+  <div id="compatWarning" class="warning" hidden></div>
+
+  <!-- Verbinding -->
+  <section class="card">
+    <h2>Verbinding</h2>
+    <div class="conn-row">
+      <span id="bleState" class="pill" data-state="idle"><span class="dot"></span><span id="bleStateText">Niet verbonden</span></span>
+      <button id="connectBleButton" class="btn-primary">Verbinden</button>
+      <button id="disconnectBleButton" hidden>Verbreken</button>
+    </div>
+  </section>
+
+  <!-- Status (komt van de ESP32 via NOTIFY) -->
+  <section class="card">
+    <h2>Status van het slot</h2>
+    <div id="statusBox" class="status" data-state="unknown">
+      <svg class="lock" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
+        <path class="shackle" d="M18 26 V18 a10 10 0 0 1 20 0 V26" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+        <rect x="11" y="25" width="34" height="25" rx="5" fill="currentColor"/>
+        <circle cx="28" cy="36" r="3.5" fill="#0f172a"/>
+        <rect x="26.5" y="37" width="3" height="7" rx="1.5" fill="#0f172a"/>
+      </svg>
+      <div>
+        <p id="statusText" class="status-text">Onbekend</p>
+        <p id="statusTime" class="status-time">Verbind om de status te zien</p>
+      </div>
+    </div>
+    <p id="pendingNote" class="pending"></p>
+  </section>
+
+  <!-- Bediening (schrijft naar de COMMAND-karakteristiek) -->
+  <section class="card">
+    <h2>Bediening</h2>
+    <div class="controls">
+      <button id="openButton" disabled>
+        <span aria-hidden="true">🔓</span> Openen
+      </button>
+      <button id="closeButton" disabled>
+        <span aria-hidden="true">🔒</span> Sluiten
+      </button>
+    </div>
+    <p class="sent">Laatst verzonden: <strong id="latestValueSent">-</strong> <span id="latestValueSentTime"></span></p>
+  </section>
+
+  <!-- Planning (INFO-karakteristiek, elke seconde via NOTIFY) -->
+  <section class="card">
+    <h2>Geplande levering</h2>
+    <div class="info"><span aria-hidden="true">⏱️</span><span id="infoText">-</span></div>
+  </section>
+
+  <!-- Logboek van alle berichten heen en weer -->
+  <section class="card">
+    <h2>Logboek (gsm ⇄ ESP32)</h2>
+    <ul id="logList"></ul>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Technische details</summary>
+      <dl>
+        <dt>Apparaat</dt><dd id="detailDevice">-</dd>
+        <dt>Service</dt><dd id="detailService">-</dd>
+        <dt>Verzonden bytes</dt><dd id="detailSentBytes">-</dd>
+        <dt>Ontvangen bytes</dt><dd id="detailReceivedBytes">-</dd>
+      </dl>
+    </details>
+  </section>
+</main>
+
+<script>
+  // ==========================================================================
+  // Configuratie: MOET exact overeenkomen met config.h op de ESP32
+  // ==========================================================================
+  const DEVICE_NAME = 'Pakketbox-Saki';
+  const SERVICE_UUID = '7a1c0000-3f4e-4b8a-9c2d-6e5f1a2b3c4d';
+  const COMMAND_CHAR_UUID = '7a1c0001-3f4e-4b8a-9c2d-6e5f1a2b3c4d'; // gsm -> ESP32 (WRITE)
+  const STATUS_CHAR_UUID = '7a1c0002-3f4e-4b8a-9c2d-6e5f1a2b3c4d';  // ESP32 -> gsm (READ + NOTIFY)
+  const INFO_CHAR_UUID = '7a1c0003-3f4e-4b8a-9c2d-6e5f1a2b3c4d';    // ESP32 -> gsm (READ + NOTIFY)
+
+  const CMD_OPEN = 'OPEN';
+  const CMD_CLOSE = 'SLUIT';
+  const STATUS_OPEN_TEXT = 'Pakketbox open';
+
+  // Hoe lang we wachten op de statusbevestiging van de ESP32 na een commando.
+  const CONFIRM_TIMEOUT_MS = 3000;
+  const MAX_LOG_ITEMS = 15;
+
+  // ==========================================================================
+  // BLE-objecten en toestand
+  // ==========================================================================
+  let bleDevice = null;
+  let bleServer = null;
+  let commandCharacteristic = null;
+  let statusCharacteristic = null;
+  let infoCharacteristic = null;
+
+  let writeInProgress = false; // BLE doet maar één GATT-operatie tegelijk
+  let confirmTimer = null;
+
+  // BLE verstuurt enkel bytes: tekst <-> bytes omzetten (UTF-8).
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  // ==========================================================================
+  // HTML-elementen
+  // ==========================================================================
+  const compatWarning = document.getElementById('compatWarning');
+  const connectButton = document.getElementById('connectBleButton');
+  const disconnectButton = document.getElementById('disconnectBleButton');
+  const bleState = document.getElementById('bleState');
+  const bleStateText = document.getElementById('bleStateText');
+  const statusBox = document.getElementById('statusBox');
+  const statusText = document.getElementById('statusText');
+  const statusTime = document.getElementById('statusTime');
+  const pendingNote = document.getElementById('pendingNote');
+  const openButton = document.getElementById('openButton');
+  const closeButton = document.getElementById('closeButton');
+  const latestValueSent = document.getElementById('latestValueSent');
+  const latestValueSentTime = document.getElementById('latestValueSentTime');
+  const infoText = document.getElementById('infoText');
+  const logList = document.getElementById('logList');
+  const detailDevice = document.getElementById('detailDevice');
+  const detailService = document.getElementById('detailService');
+  const detailSentBytes = document.getElementById('detailSentBytes');
+  const detailReceivedBytes = document.getElementById('detailReceivedBytes');
+
+  // ==========================================================================
+  // Event listeners: knoppen koppelen aan functies
+  // ==========================================================================
+  connectButton.addEventListener('click', connectToDevice);
+  disconnectButton.addEventListener('click', disconnectDevice);
+  openButton.addEventListener('click', () => writeOnCharacteristic(CMD_OPEN));
+  closeButton.addEventListener('click', () => writeOnCharacteristic(CMD_CLOSE));
+
+  checkCompatibility();
+
+  // ==========================================================================
+  // 1. Verbinding leggen + services/karakteristieken ophalen + notificaties
+  // ==========================================================================
+  async function connectToDevice() {
+    try {
+      setConnectionState('Zoeken...', 'busy');
+
+      // 1a) Koppelvenster van de browser: toont enkel apparaten met onze naam.
+      //     optionalServices: anders mag de pagina onze service niet gebruiken.
+      bleDevice = await navigator.bluetooth.requestDevice({
+        filters: [{ name: DEVICE_NAME }],
+        optionalServices: [SERVICE_UUID]
+      });
+      bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+      // 1b) Verbinding maken met de GATT-server op de ESP32.
+      setConnectionState('Verbinden...', 'busy');
+      bleServer = await bleDevice.gatt.connect();
+
+      // 1c) Onze service ophalen via zijn UUID.
+      const service = await bleServer.getPrimaryService(SERVICE_UUID);
+
+      // 1d) De drie karakteristieken ophalen.
+      commandCharacteristic = await service.getCharacteristic(COMMAND_CHAR_UUID);
+      statusCharacteristic = await service.getCharacteristic(STATUS_CHAR_UUID);
+      infoCharacteristic = await service.getCharacteristic(INFO_CHAR_UUID);
+
+      // 1e) Beginstand opvragen met een READ (anders zien we pas iets bij de
+      //     eerstvolgende wijziging).
+      showStatus(await statusCharacteristic.readValue(), false);
+      showInfo(await infoCharacteristic.readValue());
+
+      // 1f) Notificaties inschakelen: event-listener koppelen + startNotifications()
+      //     (= schrijft "aan" in de CCCD-descriptor 0x2902 op de ESP32).
+      statusCharacteristic.addEventListener('characteristicvaluechanged', handleStatusChange);
+      await statusCharacteristic.startNotifications();
+      infoCharacteristic.addEventListener('characteristicvaluechanged', handleInfoChange);
+      await infoCharacteristic.startNotifications();
+
+      // HIER WORDT HET SCHERM (UI) BIJGEWERKT: verbonden-toestand tonen.
+      setConnectionState(`Verbonden met ${bleDevice.name}`, 'connected');
+      detailDevice.textContent = bleDevice.name;
+      detailService.textContent = SERVICE_UUID;
+      connectButton.hidden = true;
+      disconnectButton.hidden = false;
+      setControlsEnabled(true);
+      addLog('system', 'Verbonden, notificaties actief');
+    } catch (error) {
+      if (error.name === 'NotFoundError') {
+        // Gebruiker sloot het koppelvenster zonder te kiezen.
+        setConnectionState('Niet verbonden', 'idle');
+        return;
+      }
+      console.error('Fout bij verbinden:', error);
+      setConnectionState('Verbinden mislukt', 'error');
+      addLog('error', `Verbinden mislukt: ${error.message}`);
+      if (bleDevice && bleDevice.gatt.connected) {
+        bleDevice.gatt.disconnect();
+      }
+    }
+  }
+
+  function disconnectDevice() {
+    if (bleDevice && bleDevice.gatt.connected) {
+      bleDevice.gatt.disconnect(); // vuurt 'gattserverdisconnected' af
+    }
+  }
+
+  // Event: verbinding verbroken (door de knop, buiten bereik of ESP32 reset).
+  function onDisconnected() {
+    clearPending();
+    commandCharacteristic = statusCharacteristic = infoCharacteristic = null;
+    bleServer = null;
+
+    // HIER WORDT HET SCHERM (UI) BIJGEWERKT: terug naar niet-verbonden.
+    setConnectionState('Niet verbonden', 'idle');
+    connectButton.hidden = false;
+    disconnectButton.hidden = true;
+    setControlsEnabled(false);
+    statusBox.dataset.state = 'unknown';
+    statusText.textContent = 'Onbekend';
+    statusTime.textContent = 'Verbinding verbroken';
+    infoText.textContent = '-';
+    addLog('system', 'Verbinding verbroken');
+  }
+
+  // ==========================================================================
+  // 2. Commando versturen (gsm -> ESP32) + scherm bijwerken
+  // ==========================================================================
+  async function writeOnCharacteristic(command) {
+    if (!bleServer || !bleServer.connected || !commandCharacteristic) {
+      addLog('error', 'Niet verbonden');
+      return;
+    }
+    if (writeInProgress) {
+      return;
+    }
+
+    writeInProgress = true;
+    setControlsEnabled(false);
+
+    // Tekst -> bytes, bv. "OPEN" -> 4F 50 45 4E
+    const data = encoder.encode(command);
+    addLog('out', `${command}  (${toHex(data)})`);
+    startConfirmTimer(command);
+
+    try {
+      // ATT Write Request: de belofte (promise) lost pas op wanneer de ESP32
+      // een Write Response terugstuurt = "commando goed ontvangen".
+      await commandCharacteristic.writeValueWithResponse(data);
+
+      // HIER WORDT HET SCHERM (UI) BIJGEWERKT: verzonden commando tonen.
+      latestValueSent.textContent = command;
+      latestValueSentTime.textContent = `om ${timeNow()}`;
+      detailSentBytes.textContent = toHex(data);
+    } catch (error) {
+      clearPending();
+      console.error('Fout bij schrijven:', error);
+      addLog('error', `Versturen mislukt: ${error.message}`);
+    } finally {
+      writeInProgress = false;
+      setControlsEnabled(Boolean(bleServer && bleServer.connected));
+    }
+  }
+
+  // Wacht op de statusbevestiging van de ESP32; komt die niet, dan waarschuwen.
+  function startConfirmTimer(command) {
+    clearPending();
+    pendingNote.textContent = `"${command}" verzonden, wachten op bevestiging van de ESP32...`;
+    confirmTimer = setTimeout(() => {
+      pendingNote.textContent = 'Geen bevestiging ontvangen! Controleer de ESP32 en de seriële monitor.';
+      addLog('error', 'Geen statusbevestiging ontvangen');
+    }, CONFIRM_TIMEOUT_MS);
+  }
+
+  function clearPending() {
+    clearTimeout(confirmTimer);
+    confirmTimer = null;
+    pendingNote.textContent = '';
+  }
+
+  // ==========================================================================
+  // 3. Inkomende notificaties verwerken (ESP32 -> gsm) + scherm bijwerken
+  // ==========================================================================
+
+  // Event 'characteristicvaluechanged' op de STATUS-karakteristiek.
+  function handleStatusChange(event) {
+    showStatus(event.target.value, true);
+  }
+
+  // Event 'characteristicvaluechanged' op de INFO-karakteristiek (elke seconde).
+  function handleInfoChange(event) {
+    showInfo(event.target.value);
+  }
+
+  // dataView: de ruwe bytes zoals ze over BLE binnenkwamen.
+  function showStatus(dataView, fromNotification) {
+    const text = decoder.decode(dataView); // bytes -> "Pakketbox open"
+    const isOpen = text === STATUS_OPEN_TEXT;
+    clearPending();
+
+    // HIER WORDT HET SCHERM (UI) BIJGEWERKT: status, kleur, slot-icoon en knoppen.
+    statusText.textContent = text;
+    statusTime.textContent = `Bevestigd door ESP32 om ${timeNow()}`;
+    statusBox.dataset.state = isOpen ? 'open' : 'closed';
+    openButton.classList.toggle('active', isOpen);
+    closeButton.classList.toggle('active', !isOpen);
+    detailReceivedBytes.textContent =
+      toHex(new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength));
+
+    addLog('in', fromNotification ? text : `${text} (gelezen)`);
+  }
+
+  function showInfo(dataView) {
+    // Formaat van de ESP32: "<actie>:<seconden>", bv. "levering:25" of "sluit:7"
+    const [action, seconds] = decoder.decode(dataView).split(':');
+    if (!seconds) {
+      return; // nog geen waarde (net opgestart)
+    }
+
+    // HIER WORDT HET SCHERM (UI) BIJGEWERKT: aftelklok.
+    infoText.textContent = action === 'sluit'
+      ? `Leveringsvenster: box vergrendelt over ${seconds} s`
+      : `Volgende geplande levering over ${seconds} s`;
+  }
+
+  // ==========================================================================
+  // Hulpfuncties voor de UI
+  // ==========================================================================
+  function setConnectionState(text, state) {
+    bleStateText.textContent = text;
+    bleState.dataset.state = state;
+  }
+
+  function setControlsEnabled(enabled) {
+    openButton.disabled = !enabled;
+    closeButton.disabled = !enabled;
+  }
+
+  // type: 'out' (gsm -> ESP32), 'in' (ESP32 -> gsm), 'system' of 'error'
+  function addLog(type, message) {
+    const labels = { out: 'gsm → ESP32', in: 'ESP32 → gsm', system: 'systeem', error: 'fout' };
+    const item = document.createElement('li');
+    item.innerHTML = `<span class="log-time">${timeNow()}</span>`
+      + `<span class="badge ${type}">${labels[type]}</span><span></span>`;
+    item.lastChild.textContent = message; // textContent: veilig, geen HTML-injectie
+    logList.prepend(item);
+    while (logList.children.length > MAX_LOG_ITEMS) {
+      logList.lastChild.remove();
+    }
+  }
+
+  function toHex(bytes) {
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+  }
+
+  function timeNow() {
+    return new Date().toLocaleTimeString('nl-BE');
+  }
+
+  function checkCompatibility() {
+    let message = '';
+    if (!('bluetooth' in navigator)) {
+      message = 'Deze browser ondersteunt geen Web Bluetooth. Gebruik Chrome op Android/pc, of de app "Bluefy" op een iPhone.';
+    } else if (!window.isSecureContext) {
+      message = 'Web Bluetooth werkt enkel via https:// of localhost. Open deze pagina via GitHub Pages.';
+    }
+    if (message) {
+      compatWarning.textContent = message;
+      compatWarning.hidden = false;
+      connectButton.disabled = true;
+    }
+  }
+</script>
+</body>
+</html>
